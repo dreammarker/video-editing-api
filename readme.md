@@ -40,7 +40,7 @@
     ```
     mkdir uploads
     ```
-    
+
 ## 주요 패키지
 
 - Gin: Go에서 HTTP 웹 프레임워크로 사용됩니다.
@@ -56,3 +56,6 @@
 
     go run main.go
 
+## api 문서 
+
+api.md에 저장되어있습니다.
