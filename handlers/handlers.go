@@ -196,6 +196,7 @@ func CutVideo(c *gin.Context) {
 		EndTime   string `json:"end_time"`
 	}
 
+	// JSON 바인딩 처리
 	if err := c.ShouldBindJSON(&request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "Invalid request format",
@@ -205,6 +206,7 @@ func CutVideo(c *gin.Context) {
 		return
 	}
 
+	// 비디오 파일 찾기
 	videoFile, exists := videoFiles[request.ID]
 	if !exists {
 		c.JSON(http.StatusNotFound, gin.H{
@@ -214,49 +216,68 @@ func CutVideo(c *gin.Context) {
 		return
 	}
 
+	// 안전한 파일명 생성
 	startTimeSafe := strings.ReplaceAll(request.StartTime, ":", "-")
 	outputFilePath := filepath.Join(UploadFolder, fmt.Sprintf("cut_%s_%s.mp4", request.ID, startTimeSafe))
 
-	go func() { // 비동기 처리
-		cmd := exec.Command("ffmpeg", "-i", videoFile.FilePath, "-ss", request.StartTime, "-to", request.EndTime, "-c", "copy", outputFilePath)
+	// FFmpeg 명령어 실행
+	cmd := exec.Command("ffmpeg", "-i", videoFile.FilePath, "-ss", request.StartTime, "-to", request.EndTime, "-c", "copy", outputFilePath)
 
-		output, err := cmd.CombinedOutput()
-		if err != nil {
-			// 로그에 에러 기록
-			fmt.Printf("Failed to execute FFmpeg command: %s\nDetails: %s\nFFmpeg output: %s\n", err.Error(), outputFilePath, string(output))
-			return
-		}
+	// FFmpeg 실행 및 출력 로그 캡처
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// 에러 발생 시 로그 기록 및 클라이언트에게 에러 응답
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":         "Failed to execute FFmpeg command",
+			"message":       "An error occurred while processing the video.",
+			"details":       err.Error(),
+			"ffmpeg_output": string(output),
+		})
+		return
+	}
 
-		// 편집 작업이 완료된 후에 결과 저장
-		videoInfo, exists := videoInfoMap[request.ID]
-		if exists {
-			videoInfo.CutEditDetails = append(videoInfo.CutEditDetails, CutEditRequest{
-				StartTime:  request.StartTime,
-				EndTime:    request.EndTime,
-				OutputPath: outputFilePath,
-			})
-			videoInfoMap[request.ID] = videoInfo
-		} else {
-			videoInfoMap[request.ID] = VideoInfo{
-				ID:               request.ID,
-				OriginalFilePath: videoFile.FilePath,
-				CutEditDetails: []CutEditRequest{
-					{
-						StartTime:  request.StartTime,
-						EndTime:    request.EndTime,
-						OutputPath: outputFilePath,
-					},
+	// 작업 완료 후 파일이 유효한지 확인 (0kb 문제 방지)
+	fileInfo, err := os.Stat(outputFilePath)
+	if err != nil || fileInfo.Size() == 0 {
+		// FFmpeg 작업 실패 또는 빈 파일이 생성되었을 때 처리
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "Failed to process video",
+			"message": "FFmpeg generated an invalid or empty file.",
+		})
+		return
+	}
+
+	// 컷 편집된 파일 정보를 저장
+	videoInfo, exists := videoInfoMap[request.ID]
+	if exists {
+		videoInfo.CutEditDetails = append(videoInfo.CutEditDetails, CutEditRequest{
+			StartTime:  request.StartTime,
+			EndTime:    request.EndTime,
+			OutputPath: outputFilePath,
+		})
+		videoInfoMap[request.ID] = videoInfo
+	} else {
+		videoInfoMap[request.ID] = VideoInfo{
+			ID:               request.ID,
+			OriginalFilePath: videoFile.FilePath,
+			CutEditDetails: []CutEditRequest{
+				{
+					StartTime:  request.StartTime,
+					EndTime:    request.EndTime,
+					OutputPath: outputFilePath,
 				},
-				ConcatDetails:  []ConcatRequest{},
-				FinalVideoPath: outputFilePath,
-			}
+			},
+			ConcatDetails:  []ConcatRequest{},
+			FinalVideoPath: outputFilePath,
 		}
-		videoTaskResult.CutFilePaths = append(videoTaskResult.CutFilePaths, outputFilePath)
-	}()
+	}
 
-	// 클라이언트에게는 작업이 시작되었음을 즉시 알림
+	// 컷 편집 결과 파일 경로 저장
+	videoTaskResult.CutFilePaths = append(videoTaskResult.CutFilePaths, outputFilePath)
+
+	// 작업 완료 후 클라이언트에 응답
 	c.JSON(http.StatusOK, gin.H{
-		"message":     "Cut editing started successfully",
+		"message":     "Cut editing completed successfully",
 		"output_file": outputFilePath,
 	})
 }
@@ -520,9 +541,12 @@ func DownloadFinalVideo(c *gin.Context) {
 		return
 	}
 
-	// 동영상 파일 경로를 URL로 변환
+	// 상대 경로에서 'uploads/'가 이미 포함되어 있는지 확인하고 중복을 방지
 	relativePath := strings.TrimPrefix(finalVideoPath, UploadFolder)
-	downloadURL := fmt.Sprintf("http://%s/uploads/%s", c.Request.Host, relativePath)
+	relativePath = strings.TrimPrefix(relativePath, "uploads/")
+
+	// 다운로드 링크 생성
+	downloadURL := fmt.Sprintf("http://%s/%s", c.Request.Host, relativePath)
 
 	// videoInfoMap에 최종 동영상 경로 저장
 	if videoInfo, exists := videoInfoMap[videoID]; exists {

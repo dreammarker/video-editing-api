@@ -137,7 +137,7 @@ Body 예시
 ```
 5. 최종 동영상 다운로드
 - Endpoint: /download
-- Method: POST
+- Method: GET
 - URL: http://localhost:8080/download
 - Description: 최종 처리된 동영상(컷 편집 또는 이어붙인 동영상)의 다운로드 링크를 생성합니다.
 
